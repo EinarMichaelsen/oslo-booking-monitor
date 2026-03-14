@@ -23,23 +23,30 @@ export default async function handler(req, res) {
   const results = [];
   const availableDates = [];
 
-  for (const date of TARGET_DATES) {
-    try {
-      const response = await fetch(
-        `${API_URL}?bookableAssetIds=${ASSET_ID}&fromInclusive=${date}&toInclusive=${date}`,
-        {
-          headers: { Accept: "application/json" },
-          signal: AbortSignal.timeout(15000),
-        }
-      );
+  const sortedDates = [...TARGET_DATES].sort();
+  const fromDate = sortedDates[0];
+  const toDate = sortedDates[sortedDates.length - 1];
 
-      if (!response.ok) {
-        console.error(`[check] API error for ${date}: HTTP ${response.status}`);
-        results.push({ date, status: "error", error: `HTTP ${response.status}` });
-        continue;
+  try {
+    const response = await fetch(
+      `${API_URL}?bookableAssetIds=${ASSET_ID}&fromInclusive=${fromDate}&toInclusive=${toDate}`,
+      {
+        headers: {
+          Accept: "application/json",
+          "User-Agent": "oslo-booking-monitor/1.0",
+        },
+        signal: AbortSignal.timeout(15000),
       }
+    );
 
-      const data = await response.json();
+    if (!response.ok) {
+      console.error(`[check] API error: HTTP ${response.status}`);
+      return res.status(502).json({ error: `API returned HTTP ${response.status}` });
+    }
+
+    const data = await response.json();
+
+    for (const date of TARGET_DATES) {
       const slots = data?.timeslotsByDate?.[date];
 
       if (!slots) {
@@ -60,10 +67,10 @@ export default async function handler(req, res) {
         console.log(`[check] Full ${date}: ${booked.length} booked`);
         results.push({ date, status: "full", bookedCount: booked.length });
       }
-    } catch (err) {
-      console.error(`[check] Error checking ${date}:`, err.message);
-      results.push({ date, status: "error", error: err.message });
     }
+  } catch (err) {
+    console.error(`[check] API error:`, err.message);
+    return res.status(502).json({ error: err.message });
   }
 
   if (availableDates.length > 0) {
