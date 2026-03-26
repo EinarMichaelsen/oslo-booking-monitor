@@ -1,5 +1,3 @@
-import { kv } from "@vercel/kv";
-
 const ASSET_ID = "c641abdd-6352-477b-8d34-d5b299922330";
 const API_URL = "https://api.booking.oslo.kommune.no/api/schedule";
 const BOOKING_URL = `https://booking.oslo.kommune.no/ressurs?ressurs=${ASSET_ID}`;
@@ -11,7 +9,9 @@ const TARGET_DATES = [
   "2026-06-20",
 ];
 
-const NOTIFY_COOLDOWN_SECONDS = 3600; // 1 hour before re-notifying about the same availability
+// Tracks the last availability fingerprint we notified about.
+// Persists across warm invocations on Vercel (resets on cold start).
+let lastNotifiedFingerprint = null;
 
 export default async function handler(req, res) {
   const start = Date.now();
@@ -79,16 +79,12 @@ export default async function handler(req, res) {
   let notified = false;
 
   if (availableDates.length > 0) {
-    // Build a fingerprint of current availability to deduplicate notifications
     const fingerprint = availableDates
       .map((d) => `${d.date}:${d.times.join(",")}`)
       .sort()
       .join("|");
 
-    // Check if we already notified about this exact availability recently
-    const lastNotified = await kv.get("last-notified-fingerprint");
-
-    if (lastNotified === fingerprint) {
+    if (lastNotifiedFingerprint === fingerprint) {
       console.log("[check] Already notified about this availability, skipping Slack");
     } else {
       const details = availableDates
@@ -130,17 +126,15 @@ export default async function handler(req, res) {
           }),
         });
         console.log(`[check] Slack response: ${slackRes.status}`);
-
-        // Store fingerprint with a cooldown so we don't re-notify for the same slots
-        await kv.set("last-notified-fingerprint", fingerprint, { ex: NOTIFY_COOLDOWN_SECONDS });
+        lastNotifiedFingerprint = fingerprint;
         notified = true;
       } catch (err) {
         console.error("[check] Slack notification failed:", err.message);
       }
     }
   } else {
-    // No availability — clear the fingerprint so we notify immediately if slots open up again
-    await kv.del("last-notified-fingerprint");
+    // No availability — reset so we notify immediately if slots open up again
+    lastNotifiedFingerprint = null;
   }
 
   const duration = Date.now() - start;
