@@ -7,7 +7,6 @@ const TARGET_DATES = [
   "2026-06-12",
   "2026-06-19",
   "2026-06-20",
-  "2026-06-26",
 ];
 
 export default async function handler(req, res) {
