@@ -1,3 +1,4 @@
+// Oslo Rådhus marriage booking monitor
 import { readFileSync, writeFileSync } from "fs";
 
 const ASSET_ID = "c641abdd-6352-477b-8d34-d5b299922330";
