@@ -9,6 +9,10 @@ const TARGET_DATES = [
   "2026-06-20",
 ];
 
+// Tracks the last availability fingerprint we notified about.
+// Persists across warm invocations on Vercel (resets on cold start).
+let lastNotifiedFingerprint = null;
+
 export default async function handler(req, res) {
   const start = Date.now();
   console.log("[check] Starting booking check", { dates: TARGET_DATES });
@@ -72,58 +76,74 @@ export default async function handler(req, res) {
     return res.status(502).json({ error: err.message });
   }
 
+  let notified = false;
+
   if (availableDates.length > 0) {
-    const details = availableDates
-      .map((d) => `*${d.date}:* ${d.times.join(", ")}`)
-      .join("\n");
+    const fingerprint = availableDates
+      .map((d) => `${d.date}:${d.times.join(",")}`)
+      .sort()
+      .join("|");
 
-    console.log(`[check] Sending Slack notification for ${availableDates.length} date(s)`);
+    if (lastNotifiedFingerprint === fingerprint) {
+      console.log("[check] Already notified about this availability, skipping Slack");
+    } else {
+      const details = availableDates
+        .map((d) => `*${d.date}:* ${d.times.join(", ")}`)
+        .join("\n");
 
-    try {
-      const slackRes = await fetch(slackWebhookUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          blocks: [
-            {
-              type: "header",
-              text: {
-                type: "plain_text",
-                text: "Wedding slot available at Oslo Radhus!",
-                emoji: true,
-              },
-            },
-            {
-              type: "section",
-              text: { type: "mrkdwn", text: details },
-            },
-            {
-              type: "actions",
-              elements: [
-                {
-                  type: "button",
-                  text: { type: "plain_text", text: "Book Now", emoji: true },
-                  url: BOOKING_URL,
-                  style: "primary",
+      console.log(`[check] Sending Slack notification for ${availableDates.length} date(s)`);
+
+      try {
+        const slackRes = await fetch(slackWebhookUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            blocks: [
+              {
+                type: "header",
+                text: {
+                  type: "plain_text",
+                  text: "Wedding slot available at Oslo Radhus!",
+                  emoji: true,
                 },
-              ],
-            },
-          ],
-        }),
-      });
-      console.log(`[check] Slack response: ${slackRes.status}`);
-    } catch (err) {
-      console.error("[check] Slack notification failed:", err.message);
+              },
+              {
+                type: "section",
+                text: { type: "mrkdwn", text: details },
+              },
+              {
+                type: "actions",
+                elements: [
+                  {
+                    type: "button",
+                    text: { type: "plain_text", text: "Book Now", emoji: true },
+                    url: BOOKING_URL,
+                    style: "primary",
+                  },
+                ],
+              },
+            ],
+          }),
+        });
+        console.log(`[check] Slack response: ${slackRes.status}`);
+        lastNotifiedFingerprint = fingerprint;
+        notified = true;
+      } catch (err) {
+        console.error("[check] Slack notification failed:", err.message);
+      }
     }
+  } else {
+    // No availability — reset so we notify immediately if slots open up again
+    lastNotifiedFingerprint = null;
   }
 
   const duration = Date.now() - start;
-  console.log(`[check] Done in ${duration}ms — notified: ${availableDates.length > 0}`);
+  console.log(`[check] Done in ${duration}ms — notified: ${notified}`);
 
   return res.status(200).json({
     checked: new Date().toISOString(),
     duration: `${duration}ms`,
     dates: results,
-    notified: availableDates.length > 0,
+    notified,
   });
 }
