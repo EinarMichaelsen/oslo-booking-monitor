@@ -1,3 +1,5 @@
+import { readFileSync, writeFileSync } from "fs";
+
 const ASSET_ID = "c641abdd-6352-477b-8d34-d5b299922330";
 const API_URL = "https://api.booking.oslo.kommune.no/api/schedule";
 const BOOKING_URL = `https://booking.oslo.kommune.no/ressurs?ressurs=${ASSET_ID}`;
@@ -9,9 +11,28 @@ const TARGET_DATES = [
   "2026-06-20",
 ];
 
-// Tracks the last availability fingerprint we notified about.
-// Persists across warm invocations on Vercel (resets on cold start).
-let lastNotifiedFingerprint = null;
+const STATE_FILE = "/tmp/booking-monitor-last-notified.json";
+
+function getLastNotified() {
+  try {
+    const data = JSON.parse(readFileSync(STATE_FILE, "utf-8"));
+    // Expire after 1 hour so we re-notify if the slot is still there after a while
+    if (Date.now() - data.timestamp < 3600000) {
+      return data.fingerprint;
+    }
+  } catch {}
+  return null;
+}
+
+function setLastNotified(fingerprint) {
+  writeFileSync(STATE_FILE, JSON.stringify({ fingerprint, timestamp: Date.now() }));
+}
+
+function clearLastNotified() {
+  try {
+    writeFileSync(STATE_FILE, JSON.stringify({ fingerprint: null, timestamp: 0 }));
+  } catch {}
+}
 
 export default async function handler(req, res) {
   const start = Date.now();
@@ -84,7 +105,9 @@ export default async function handler(req, res) {
       .sort()
       .join("|");
 
-    if (lastNotifiedFingerprint === fingerprint) {
+    const lastFingerprint = getLastNotified();
+
+    if (lastFingerprint === fingerprint) {
       console.log("[check] Already notified about this availability, skipping Slack");
     } else {
       const details = availableDates
@@ -126,15 +149,14 @@ export default async function handler(req, res) {
           }),
         });
         console.log(`[check] Slack response: ${slackRes.status}`);
-        lastNotifiedFingerprint = fingerprint;
+        setLastNotified(fingerprint);
         notified = true;
       } catch (err) {
         console.error("[check] Slack notification failed:", err.message);
       }
     }
   } else {
-    // No availability — reset so we notify immediately if slots open up again
-    lastNotifiedFingerprint = null;
+    clearLastNotified();
   }
 
   const duration = Date.now() - start;
